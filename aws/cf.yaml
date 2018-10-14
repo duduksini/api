@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: "AWS::Serverless-2016-10-31"
+Description: "duduksini api"
+Parameters:
+  Domain:
+    Type: String
+    Default: duduksini.com
+  SubDomain:
+    Type: String
+    Default: api
+  CertificateArn:
+    Type: String
+    Default: arn:aws:acm:us-east-1:587154807377:certificate/1bf3557e-efeb-4128-8b10-581a7f9b4647
+  LogLevel:
+    Type: String
+    Default: debug
+  WarmUpSchedule:
+    Type: String
+    Default: rate(5 minutes)
+Resources:
+  ServerlessFunction: 
+    Type: "AWS::Serverless::Function"
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs8.10
+      CodeUri: ../dist/index
+      MemorySize: 256
+      Timeout: 10
+      Tracing: Active
+      Role: !GetAtt ServerlessFunctionRole.Arn
+      Policies: 
+        - AWSLambdaBasicExecutionRole
+      Environment: 
+        Variables:
+          AWS_XRAY_CONTEXT_MISSING: LOG_ERROR
+          LogLevel: !Ref LogLevel
+      Events: 
+        Root: 
+          Type: Api
+          Properties: 
+            Path: "/"
+            Method: ANY
+        GreedyProxy: 
+          Type: Api
+          Properties: 
+            Path: "/{proxy+}"
+            Method: ANY
+  ServerlessFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+  ServerlessFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${ServerlessFunction}
+      RetentionInDays: 7
+  ServerlessRestApi:
+    Type: AWS::ApiGateway::RestApi
+  CustomDomain:
+    Type: AWS::ApiGateway::DomainName
+    Properties: 
+      CertificateArn: !Ref CertificateArn
+      DomainName: !Sub "${SubDomain}.${Domain}"
+  BasePathMapping:   
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      DomainName: !Sub "${SubDomain}.${Domain}"
+      RestApiId: !Ref ServerlessRestApi
+      Stage: !Ref ServerlessRestApiProdStage
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub "${Domain}."
+      Name: !Sub "${SubDomain}.${Domain}."
+      Type: A
+      AliasTarget: 
+        DNSName: !GetAtt CustomDomain.DistributionDomainName
+        HostedZoneId: Z2FDTNDATAQYW2 # CloudFront
+  PeriodicWarmUpRule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Fire lambda function periodically
+      ScheduleExpression: !Ref WarmUpSchedule
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt ServerlessFunction.Arn
+          Id: !Sub ${AWS::StackName}-warmup-schedule
+          Input: '{"resource": "/{proxy+}","path": "/api/health","httpMethod": "GET","pathParameters": {"proxy": "/api/health"},"requestContext": {"accountId": "000000000000","resourceId": "warmup","stage": "api","requestId": "warmup","identity": {"accountId": "000000000000","caller": "warmup","apiKey": "warmup","sourceIp": "warmup","userArn": "arn:aws:iam::000000000000:root","userAgent": "Apache-HttpClient/4.5.x (Java/1.8.0_102)","user": "warmup"},"resourcePath": "/{proxy+}","httpMethod": "GET","apiId": "warmup"}}'
+  WarmUpPermissionToInvoke:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ServerlessFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PeriodicWarmUpRule.Arn
+Outputs:
+  LambdaDashboard:
+    Description: Console URL for the Lambda Function.
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/lambda/home?region=${AWS::Region}#/functions/${ServerlessFunction}
+  ApiDashboard:
+    Description: API Gateway dashboard.
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/apigateway/home?region=${AWS::Region}#/apis/${ServerlessRestApi}/dashboard"
+  ApiUrl:
+    Description: Root URL of the API
+    Value: !Sub https://${SubDomain}.${Domain}
