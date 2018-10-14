@@ -5,7 +5,8 @@
   "main": "dist/index/index.js",
   "scripts": {
     "transpile": "NODE_ENV=production webpack --progress",
-    "lint": "tslint --project ."
+    "lint": "tslint --project .",
+    "start": "ts-node src/index.ts"
   },
   "repository": {
     "type": "git",
